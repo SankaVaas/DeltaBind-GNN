@@ -1,0 +1,29 @@
+# Default configuration for DeltaBind-GNN
+
+data:
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  datasets: ["schrodinger", "merck"]   # which benchmark sources to include
+  pocket_cutoff_angstrom: 5.0          # residues within this radius of ligand define pocket context
+  test_target_holdout: null            # e.g. "tyk2" to hold out one whole target for testing generalization
+
+model:
+  node_feature_dim: 32
+  hidden_dim: 128
+  num_message_passing_layers: 4
+  pairwise_head_hidden_dim: 64
+  dropout: 0.1
+
+train:
+  batch_size: 32
+  lr: 0.001
+  weight_decay: 0.00001
+  epochs: 100
+  early_stopping_patience: 15
+  val_split: 0.15
+  test_split: 0.15
+  seed: 42
+
+eval:
+  metrics: ["rmse", "mae", "spearman", "kendall_tau", "r2"]
+  compare_to_fep_baseline: true
