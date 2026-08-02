@@ -5,59 +5,119 @@ DeltaBind-GNN model: a shared GNN encoder embeds each ligand (conditioned
 optionally on a pocket context vector), and a pairwise head predicts
 ddG = dG(B) - dG(A) from the two embeddings.
 
-Baseline encoder: a simple SchNet-style continuous-filter message passing
-network operating on 3D coordinates + atom features. This is intentionally
-the simplest thing that respects 3D geometry; an E(3)-equivariant encoder
-(EGNN / e3nn) is the natural upgrade once the pipeline is validated
-end-to-end.
+Encoder: a custom SchNet-style continuous-filter message passing network
+that consumes our featurizer's actual node feature vectors directly (one-hot
+element/hybridization + atomic properties), rather than relying on a
+library encoder's built-in atomic-number embedding. Interatomic distances
+are expanded with Gaussian radial basis functions and passed through a
+filter-generating network, following Schutt et al. 2017 (SchNet) — this is
+a from-scratch implementation of that idea sized for our feature space,
+not a wrapper around a black-box encoder.
+
+An E(3)-equivariant encoder (EGNN / e3nn) is the natural v2 upgrade once
+this baseline is validated end-to-end.
 """
 
 import torch
 import torch.nn as nn
-from torch_geometric.nn import radius_graph
-from torch_geometric.nn.models import SchNet
+from torch_geometric.utils import scatter
+
+
+def radius_graph_manual(pos: torch.Tensor, batch: torch.Tensor, cutoff: float,
+                         loop: bool = False) -> torch.Tensor:
+    """Dependency-free radius graph: connects atoms within `cutoff` distance,
+    restricted to the same molecule (same `batch` index).
+
+    PyG's built-in `radius_graph` requires the compiled `pyg-lib`/`torch-cluster`
+    backend, which is fragile to install in Colab. Ligands here are small
+    (tens of atoms), so a brute-force O(n^2) pairwise distance computation per
+    forward pass is fast enough and removes that dependency entirely.
+    """
+    dist = torch.cdist(pos, pos)                       # [n, n]
+    same_molecule = batch.unsqueeze(0) == batch.unsqueeze(1)  # [n, n]
+    within_cutoff = dist <= cutoff
+    mask = within_cutoff & same_molecule
+    if not loop:
+        mask.fill_diagonal_(False)
+    row, col = mask.nonzero(as_tuple=True)
+    return torch.stack([row, col], dim=0)
+
+
+class GaussianSmearing(nn.Module):
+    """Expands scalar interatomic distances into a Gaussian radial basis,
+    the standard trick (from SchNet) for giving a neural net a smooth,
+    differentiable handle on continuous distances rather than a raw scalar."""
+
+    def __init__(self, start: float = 0.0, stop: float = 10.0, num_gaussians: int = 50):
+        super().__init__()
+        offsets = torch.linspace(start, stop, num_gaussians)
+        self.coeff = -0.5 / (offsets[1] - offsets[0]).item() ** 2
+        self.register_buffer("offsets", offsets)
+
+    def forward(self, dist: torch.Tensor) -> torch.Tensor:
+        diff = dist.view(-1, 1) - self.offsets.view(1, -1)
+        return torch.exp(self.coeff * diff.pow(2))
+
+
+class CFConv(nn.Module):
+    """Continuous-filter convolution: messages between connected atoms are
+    weighted by a filter network conditioned on their 3D distance, so the
+    layer respects geometry rather than only bond connectivity."""
+
+    def __init__(self, hidden_dim: int, num_gaussians: int = 50):
+        super().__init__()
+        self.filter_net = nn.Sequential(
+            nn.Linear(num_gaussians, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+        self.lin_in = nn.Linear(hidden_dim, hidden_dim, bias=False)
+        self.lin_out = nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.ReLU())
+
+    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_rbf: torch.Tensor) -> torch.Tensor:
+        row, col = edge_index  # row = target node, col = source node
+        W = self.filter_net(edge_rbf)                 # [num_edges, hidden_dim]
+        messages = self.lin_in(x[col]) * W             # [num_edges, hidden_dim]
+        aggregated = scatter(messages, row, dim=0, dim_size=x.size(0), reduce="sum")
+        return self.lin_out(aggregated)
 
 
 class LigandEncoder(nn.Module):
-    """Wraps PyG's SchNet as a per-atom -> pooled molecule embedding encoder.
+    """Custom continuous-filter GNN encoder: raw node features -> pooled
+    molecule embedding, conditioned on 3D geometry via a radius graph."""
 
-    Using PyG's built-in SchNet implementation for the baseline rather than
-    hand-rolling message passing, so the project's novelty sits in the
-    pairwise/pocket-conditioning framing and evaluation methodology, not in
-    reimplementing a standard encoder from scratch.
-    """
-
-    def __init__(self, hidden_dim: int = 128, num_interactions: int = 4,
-                 num_gaussians: int = 50, cutoff: float = 10.0):
+    def __init__(self, node_feature_dim: int, hidden_dim: int = 128,
+                 num_interactions: int = 4, num_gaussians: int = 50, cutoff: float = 10.0):
         super().__init__()
-        self.schnet = SchNet(
-            hidden_channels=hidden_dim,
-            num_filters=hidden_dim,
-            num_interactions=num_interactions,
-            num_gaussians=num_gaussians,
-            cutoff=cutoff,
-            readout="mean",
-        )
-        # Drop SchNet's final scalar-output layer; we want the pooled embedding.
         self.embedding_dim = hidden_dim
+        self.cutoff = cutoff
 
-    def forward(self, z_or_x, pos, batch):
+        self.node_embed = nn.Linear(node_feature_dim, hidden_dim)
+        self.rbf = GaussianSmearing(0.0, cutoff, num_gaussians)
+        self.interactions = nn.ModuleList([
+            CFConv(hidden_dim, num_gaussians) for _ in range(num_interactions)
+        ])
+
+    def forward(self, x: torch.Tensor, pos: torch.Tensor, batch: torch.Tensor) -> torch.Tensor:
         """
-        z_or_x: atomic numbers if using SchNet's built-in embedding, OR
-                precomputed node features (see note below).
-        pos: [num_atoms, 3]
-        batch: [num_atoms] graph index per atom
+        x:    [num_atoms, node_feature_dim]  raw features from featurize.py
+        pos:  [num_atoms, 3]                 3D coordinates
+        batch:[num_atoms]                    graph index per atom (from PyG Batch)
         """
-        # NOTE: PyG's SchNet expects integer atomic numbers (z) for its
-        # internal embedding layer. Our featurize.py currently produces
-        # one-hot + property node features (richer than plain element type).
-        # For the first working baseline, pass atomic-number-equivalent ints
-        # derived from the one-hot element channel; swap in a custom
-        # message-passing encoder later to use the full feature vector.
-        h = self.schnet.embedding(z_or_x)
-        for interaction in self.schnet.interactions:
-            h = h + interaction(h, pos, batch, edge_index=None)
-        pooled = self.schnet.readout(h, batch)
+        h = self.node_embed(x)
+
+        # Build a distance-based graph (covers non-bonded neighbors too, unlike
+        # the covalent-bond-only edge_index from featurize.py — geometry, not
+        # just connectivity, is what should drive message passing here).
+        edge_index = radius_graph_manual(pos, batch, cutoff=self.cutoff, loop=False)
+        row, col = edge_index
+        dist = (pos[row] - pos[col]).norm(dim=-1)
+        edge_rbf = self.rbf(dist)
+
+        for conv in self.interactions:
+            h = h + conv(h, edge_index, edge_rbf)
+
+        pooled = scatter(h, batch, dim=0, reduce="mean")
         return pooled
 
 
@@ -87,10 +147,14 @@ class PairwiseDeltaHead(nn.Module):
 class DeltaBindGNN(nn.Module):
     """Full model: shared encoder (Siamese) + pairwise ddG head."""
 
-    def __init__(self, hidden_dim: int = 128, num_interactions: int = 4,
+    def __init__(self, node_feature_dim: int, hidden_dim: int = 128, num_interactions: int = 4,
                  pocket_dim: int = 0, head_hidden_dim: int = 64, dropout: float = 0.1):
         super().__init__()
-        self.encoder = LigandEncoder(hidden_dim=hidden_dim, num_interactions=num_interactions)
+        self.encoder = LigandEncoder(
+            node_feature_dim=node_feature_dim,
+            hidden_dim=hidden_dim,
+            num_interactions=num_interactions,
+        )
         self.head = PairwiseDeltaHead(
             embedding_dim=self.encoder.embedding_dim,
             pocket_dim=pocket_dim,
