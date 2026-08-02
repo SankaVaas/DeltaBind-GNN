@@ -26,7 +26,8 @@ from torch.utils.data import DataLoader
 
 from src.data.dataset import LigandPairDataset, collate_pairs
 from src.models.model import DeltaBindGNN
-
+from src.data.featurize import ELEMENTS, HYBRIDIZATIONS
+NODE_FEATURE_DIM = len(ELEMENTS) + len(HYBRIDIZATIONS) + 4
 
 def compute_metrics(preds: np.ndarray, labels: np.ndarray) -> dict:
     return {
@@ -77,7 +78,7 @@ def main():
     dataset = LigandPairDataset(args.edges_csv, args.sdf_dir)
     loader = DataLoader(dataset, batch_size=32, shuffle=False, collate_fn=collate_pairs)
 
-    model = DeltaBindGNN(hidden_dim=args.hidden_dim, num_interactions=args.num_interactions).to(device)
+    model = DeltaBindGNN(node_feature_dim=NODE_FEATURE_DIM, hidden_dim=args.hidden_dim, num_interactions=args.num_interactions).to(device)
     model.load_state_dict(torch.load(args.checkpoint, map_location=device))
 
     results_df = run_inference(model, loader, device)

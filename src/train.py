@@ -17,7 +17,8 @@ from torch.utils.data import DataLoader, random_split
 
 from src.data.dataset import LigandPairDataset, collate_pairs
 from src.models.model import DeltaBindGNN
-
+from src.data.featurize import ELEMENTS, HYBRIDIZATIONS
+NODE_FEATURE_DIM = len(ELEMENTS) + len(HYBRIDIZATIONS) + 4
 
 def train_one_epoch(model, loader, optimizer, loss_fn, device):
     model.train()
@@ -88,6 +89,7 @@ def main():
                              collate_fn=collate_pairs)
 
     model = DeltaBindGNN(
+        node_feature_dim=NODE_FEATURE_DIM,
         hidden_dim=cfg["model"]["hidden_dim"],
         num_interactions=cfg["model"]["num_message_passing_layers"],
         head_hidden_dim=cfg["model"]["pairwise_head_hidden_dim"],
