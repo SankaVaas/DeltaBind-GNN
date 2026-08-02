@@ -26,9 +26,25 @@ Usage:
 
 import argparse
 import os
+import re
 
 import pandas as pd
 from rdkit import Chem
+
+# The core 8 targets from the Schindler et al. RBFE benchmark
+CORE_TARGETS = {
+    "cdk8", "cmet", "eg5", "eg5_alternativeloop",
+    "hif2a", "hif2a-jmc2023", "pfkfb3", "shp2", "syk", "tnks2",
+}
+
+
+def sanitize_filename(name: str) -> str:
+    """Make a ligand name safe to use as a filename, e.g. 'SHP099-1/Example 7'
+    -> 'SHP099-1_Example_7'. The original `name` is still used as the lookup
+    key for matching against the CSV's ligand IDs — only the on-disk
+    filename is sanitized."""
+    safe = re.sub(r"[^\w\-.]", "_", name.strip())
+    return safe
 
 
 def split_target_sdf(target: str, raw_dir: str, out_sdf_dir: str) -> dict:
@@ -53,11 +69,15 @@ def split_target_sdf(target: str, raw_dir: str, out_sdf_dir: str) -> dict:
         if not name:
             continue
 
-        out_path = os.path.join(out_dir, f"{name}.sdf")
-        writer = Chem.SDWriter(out_path)
-        writer.write(mol)
-        writer.close()
-        id_to_path[name] = out_path
+        safe_name = sanitize_filename(name)
+        out_path = os.path.join(out_dir, f"{safe_name}.sdf")
+        try:
+            writer = Chem.SDWriter(out_path)
+            writer.write(mol)
+            writer.close()
+            id_to_path[name] = out_path  # lookup key stays the original, unsanitized name
+        except OSError as e:
+            print(f"[warn] could not write ligand '{name}' for target '{target}': {e}")
 
     return id_to_path
 
@@ -86,6 +106,11 @@ def main():
     unresolved = []
 
     for target, group in df.groupby("target"):
+        if target not in CORE_TARGETS:
+            print(f"[skip] '{target}' is not one of the core 8 RBFE benchmark targets "
+                  f"(likely supplementary data with a different file layout) — skipping.")
+            continue
+
         id_to_path = split_target_sdf(target, args.raw_dir, args.out_sdf_dir)
         print(f"[{target}] split {len(id_to_path)} ligands from ligands.sdf. "
               f"Example IDs found: {list(id_to_path.keys())[:5]}")
