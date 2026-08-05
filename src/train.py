@@ -80,13 +80,17 @@ def main():
     train_idx, val_idx, test_idx = ligand_holdout_split(
         dataset.edges, val_frac=val_frac, test_frac=test_frac, seed=cfg["train"]["seed"]
     )
+    test_edges_df = dataset.edges.loc[test_idx]
+    test_edges_df.to_csv("data/processed/edges_test.csv", index=False)
+    
+    print(f"Held-out test edges saved to data/processed/edges_test.csv ({len(test_edges_df)} edges)")
     print(f"Ligand-holdout split: {len(train_idx)} train / {len(val_idx)} val / {len(test_idx)} test edges "
         f"(dropped {len(dataset) - len(train_idx) - len(val_idx) - len(test_idx)} straddling edges)")
 
     train_set = Subset(dataset, train_idx)
     val_set = Subset(dataset, val_idx)
     test_set = Subset(dataset, test_idx)
-    
+
     train_loader = DataLoader(train_set, batch_size=cfg["train"]["batch_size"], shuffle=True,
                                collate_fn=collate_pairs)
     val_loader = DataLoader(val_set, batch_size=cfg["train"]["batch_size"], shuffle=False,
