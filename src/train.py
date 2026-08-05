@@ -11,9 +11,11 @@ Usage:
 import argparse
 import yaml
 
+from src.data import dataset
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, Subset
+from src.data.splits import ligand_holdout_split
 
 from src.data.dataset import LigandPairDataset, collate_pairs
 from src.models.model import DeltaBindGNN
@@ -75,14 +77,16 @@ def main():
 
     val_frac = cfg["train"]["val_split"]
     test_frac = cfg["train"]["test_split"]
-    n = len(dataset)
-    n_val = int(n * val_frac)
-    n_test = int(n * test_frac)
-    n_train = n - n_val - n_test
+    train_idx, val_idx, test_idx = ligand_holdout_split(
+        dataset.edges, val_frac=val_frac, test_frac=test_frac, seed=cfg["train"]["seed"]
+    )
+    print(f"Ligand-holdout split: {len(train_idx)} train / {len(val_idx)} val / {len(test_idx)} test edges "
+        f"(dropped {len(dataset) - len(train_idx) - len(val_idx) - len(test_idx)} straddling edges)")
 
-    generator = torch.Generator().manual_seed(cfg["train"]["seed"])
-    train_set, val_set, test_set = random_split(dataset, [n_train, n_val, n_test], generator=generator)
-
+    train_set = Subset(dataset, train_idx)
+    val_set = Subset(dataset, val_idx)
+    test_set = Subset(dataset, test_idx)
+    
     train_loader = DataLoader(train_set, batch_size=cfg["train"]["batch_size"], shuffle=True,
                                collate_fn=collate_pairs)
     val_loader = DataLoader(val_set, batch_size=cfg["train"]["batch_size"], shuffle=False,
