@@ -109,10 +109,11 @@ def run_cycle_loss_step(model, target_cycles, optimizer, device, epoch):
     """One extra gradient step per epoch using the cycle-consistency loss.
     Kept separate from the main batch loop since each cycle costs 3x the
     forward passes of a normal edge -- not worth doing every batch."""
+
     if not target_cycles:
         return 0.0
 
-    cyc_loss = cycle_consistency_loss(model, target_cycles, device,
+    cyc_loss = cycle_consistency_loss(model, target_cycles, device, target_to_idx,
                                        max_cycles_per_call=CYCLES_PER_EPOCH, seed=epoch)
     if not cyc_loss.requires_grad:
         return cyc_loss.item()
@@ -182,7 +183,7 @@ def main():
 
     for epoch in range(cfg["train"]["epochs"]):
         train_loss = train_one_epoch(model, train_loader, optimizer, loss_fn, device)
-        cyc_loss = run_cycle_loss_step(model, target_cycles, optimizer, device, epoch)
+        cyc_loss = run_cycle_loss_step(model, target_cycles, optimizer, device, epoch, target_to_idx)
         val_loss = evaluate_loss(model, val_loader, loss_fn, device)
 
         print(f"Epoch {epoch+1:03d} | train_loss {train_loss:.4f} | "
