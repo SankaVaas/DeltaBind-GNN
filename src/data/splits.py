@@ -13,6 +13,7 @@ Edges that straddle two splits are dropped rather than risk leakage.
 
 import random
 
+
 def ligand_holdout_split(edges_df, val_frac=0.15, test_frac=0.15, seed=42):
     rng = random.Random(seed)
     train_idx, val_idx, test_idx = [], [], []
@@ -27,16 +28,16 @@ def ligand_holdout_split(edges_df, val_frac=0.15, test_frac=0.15, seed=42):
 
         val_ligands = set(ligands[:n_val])
         test_ligands = set(ligands[n_val:n_val + n_test])
-        # everything else is implicitly train
+        train_ligands = set(ligands[n_val + n_test:])
 
         for idx, row in group.iterrows():
             a, b = row["ligand_A_id"], row["ligand_B_id"]
-            # priority: if either ligand is held out for test, the edge is test
-            if a in test_ligands or b in test_ligands:
-                test_idx.append(idx)
-            elif a in val_ligands or b in val_ligands:
-                val_idx.append(idx)
-            else:
+            if a in train_ligands and b in train_ligands:
                 train_idx.append(idx)
+            elif a in val_ligands and b in val_ligands:
+                val_idx.append(idx)
+            elif a in test_ligands and b in test_ligands:
+                test_idx.append(idx)
+            # else: edge straddles two ligand sets -> dropped, avoids leakage
 
     return train_idx, val_idx, test_idx

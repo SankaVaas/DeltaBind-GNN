@@ -75,9 +75,14 @@ class LigandPairDataset(Dataset):
         }
 
 
-def collate_pairs(batch):
+def collate_pairs(batch, target_to_idx=None):
     """Custom collate: batches ligand_a and ligand_b graphs separately via PyG's Batch,
-    keeps labels/baselines/targets as simple tensors/lists."""
+    keeps labels/baselines/targets as simple tensors/lists.
+
+    target_to_idx: dict mapping target name -> integer index, used to build
+    the target_idx tensor consumed by DeltaBindGNN's per-target embedding.
+    Built once in train.py from the full dataset's unique targets.
+    """
     from torch_geometric.data import Batch
 
     ligand_a_batch = Batch.from_data_list([b["ligand_a"] for b in batch])
@@ -86,6 +91,10 @@ def collate_pairs(batch):
     fep_baselines = torch.cat([b["fep_baseline"] for b in batch])
     targets = [b["target"] for b in batch]
 
+    target_idx = None
+    if target_to_idx is not None:
+        target_idx = torch.tensor([target_to_idx[t] for t in targets], dtype=torch.long)
+
     pockets = None
     if batch[0]["pocket"] is not None:
         pockets = torch.stack([b["pocket"] for b in batch])
@@ -93,6 +102,7 @@ def collate_pairs(batch):
     return {
         "ligand_a": ligand_a_batch,
         "ligand_b": ligand_b_batch,
+        "target_idx": target_idx,
         "pocket": pockets,
         "targets": targets,
         "labels": labels,

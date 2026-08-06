@@ -145,19 +145,23 @@ class PairwiseDeltaHead(nn.Module):
 
 
 class DeltaBindGNN(nn.Module):
-    """Full model: shared encoder (Siamese) + pairwise ddG head."""
+    """Full model: shared encoder (Siamese) + pairwise ddG head, conditioned
+    on a learned per-target embedding (cheap proxy for pocket identity until
+    real pocket-geometry features are wired in via extract_pocket_residues)."""
 
-    def __init__(self, node_feature_dim: int, hidden_dim: int = 128, num_interactions: int = 4,
-                 pocket_dim: int = 0, head_hidden_dim: int = 64, dropout: float = 0.1):
+    def __init__(self, node_feature_dim: int, num_targets: int, hidden_dim: int = 128,
+                 num_interactions: int = 4, target_embed_dim: int = 16,
+                 head_hidden_dim: int = 64, dropout: float = 0.1):
         super().__init__()
         self.encoder = LigandEncoder(
             node_feature_dim=node_feature_dim,
             hidden_dim=hidden_dim,
             num_interactions=num_interactions,
         )
+        self.target_embedding = nn.Embedding(num_targets, target_embed_dim)
         self.head = PairwiseDeltaHead(
             embedding_dim=self.encoder.embedding_dim,
-            pocket_dim=pocket_dim,
+            pocket_dim=target_embed_dim,
             hidden_dim=head_hidden_dim,
             dropout=dropout,
         )
@@ -165,4 +169,5 @@ class DeltaBindGNN(nn.Module):
     def forward(self, batch):
         emb_a = self.encoder(batch["ligand_a"].x, batch["ligand_a"].pos, batch["ligand_a"].batch)
         emb_b = self.encoder(batch["ligand_b"].x, batch["ligand_b"].pos, batch["ligand_b"].batch)
-        return self.head(emb_a, emb_b, batch.get("pocket"))
+        pocket_vec = self.target_embedding(batch["target_idx"])
+        return self.head(emb_a, emb_b, pocket_vec)

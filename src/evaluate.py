@@ -2,20 +2,23 @@
 evaluate.py
 
 Evaluates a trained DeltaBind-GNN checkpoint against experimental ddG, and
-— where available — against Schrodinger's own published FEP+ predictions on
-the same ligand pairs. This second comparison is the actual point of the
-project: it's not enough to be "accurate" in the abstract, the model needs
-to be benchmarked against the physics-based method it's meant to speed up.
+-- where available -- against Schrodinger's own published FEP+ predictions
+on the same ligand pairs.
+
+IMPORTANT: point --edges_csv at data/processed/edges_test.csv (written by
+train.py), not edges_final.csv. Evaluating on the full edge set mixes in
+edges the model trained on, which inflates every metric.
 
 Reports, overall and per-target:
     RMSE, MAE, R^2, Spearman rho, Kendall tau
 
 Usage:
     python -m src.evaluate --checkpoint results/best_model.pt \
-        --edges_csv data/processed/edges_final.csv
+        --edges_csv data/processed/edges_test.csv
 """
 
 import argparse
+from functools import partial
 
 import numpy as np
 import pandas as pd
@@ -25,9 +28,11 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from torch.utils.data import DataLoader
 
 from src.data.dataset import LigandPairDataset, collate_pairs
-from src.models.model import DeltaBindGNN
 from src.data.featurize import ELEMENTS, HYBRIDIZATIONS
+from src.models.model import DeltaBindGNN
+
 NODE_FEATURE_DIM = len(ELEMENTS) + len(HYBRIDIZATIONS) + 4
+
 
 def compute_metrics(preds: np.ndarray, labels: np.ndarray) -> dict:
     return {
@@ -47,8 +52,7 @@ def run_inference(model, loader, device):
     for batch in loader:
         batch["ligand_a"] = batch["ligand_a"].to(device)
         batch["ligand_b"] = batch["ligand_b"].to(device)
-        if batch["pocket"] is not None:
-            batch["pocket"] = batch["pocket"].to(device)
+        batch["target_idx"] = batch["target_idx"].to(device)
 
         preds = model(batch).cpu().numpy()
         all_preds.extend(preds.tolist())
@@ -67,7 +71,7 @@ def run_inference(model, loader, device):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", default="results/best_model.pt")
-    parser.add_argument("--edges_csv", default="data/processed/edges_final.csv")
+    parser.add_argument("--edges_csv", default="data/processed/edges_test.csv")
     parser.add_argument("--sdf_dir", default="data/processed/sdf")
     parser.add_argument("--hidden_dim", type=int, default=128)
     parser.add_argument("--num_interactions", type=int, default=4)
@@ -76,9 +80,21 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     dataset = LigandPairDataset(args.edges_csv, args.sdf_dir)
-    loader = DataLoader(dataset, batch_size=32, shuffle=False, collate_fn=collate_pairs)
 
-    model = DeltaBindGNN(node_feature_dim=NODE_FEATURE_DIM, hidden_dim=args.hidden_dim, num_interactions=args.num_interactions).to(device)
+    # NOTE: target vocabulary must be built from the SAME full edge set used
+    # at train time (edges_final.csv), not just this eval subset -- otherwise
+    # target indices won't line up with the trained embedding weights if this
+    # eval file happens to be missing a target that appeared during training.
+    full_edges = pd.read_csv("data/processed/edges_final.csv")
+    unique_targets = sorted(full_edges["target"].unique())
+    target_to_idx = {t: i for i, t in enumerate(unique_targets)}
+    num_targets = len(unique_targets)
+    collate_fn = partial(collate_pairs, target_to_idx=target_to_idx)
+
+    loader = DataLoader(dataset, batch_size=32, shuffle=False, collate_fn=collate_fn)
+
+    model = DeltaBindGNN(node_feature_dim=NODE_FEATURE_DIM, num_targets=num_targets,
+                         hidden_dim=args.hidden_dim, num_interactions=args.num_interactions).to(device)
     model.load_state_dict(torch.load(args.checkpoint, map_location=device))
 
     results_df = run_inference(model, loader, device)
