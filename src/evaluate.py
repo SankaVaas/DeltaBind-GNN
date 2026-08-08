@@ -47,7 +47,7 @@ def compute_metrics(preds: np.ndarray, labels: np.ndarray) -> dict:
 @torch.no_grad()
 def run_inference(model, loader, device):
     model.eval()
-    all_preds, all_labels, all_fep, all_targets = [], [], [], []
+    all_preds, all_labels, all_fep, all_targets, all_edge_idx = [], [], [], [], []
 
     for batch in loader:
         batch["ligand_a"] = batch["ligand_a"].to(device)
@@ -59,8 +59,10 @@ def run_inference(model, loader, device):
         all_labels.extend(batch["labels"].numpy().tolist())
         all_fep.extend(batch["fep_baselines"].numpy().tolist())
         all_targets.extend(batch["targets"])
+        all_edge_idx.extend(batch["edge_indices"])
 
     return pd.DataFrame({
+        "edge_idx": all_edge_idx,
         "target": all_targets,
         "pred_ddg": all_preds,
         "exp_ddg": all_labels,

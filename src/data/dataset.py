@@ -72,6 +72,7 @@ class LigandPairDataset(Dataset):
             "target": row["target"],
             "label": label,
             "fep_baseline": fep_baseline,
+            "edge_idx": idx,
         }
 
 
@@ -82,6 +83,11 @@ def collate_pairs(batch, target_to_idx=None):
     target_to_idx: dict mapping target name -> integer index, used to build
     the target_idx tensor consumed by DeltaBindGNN's per-target embedding.
     Built once in train.py from the full dataset's unique targets.
+
+    edge_idx: each item's original row index in edges_final.csv, carried
+    through so kfold_eval.py can dedupe an edge that legitimately appears
+    in more than one fold's test set (see splits.py docstring) without
+    double-counting it in the pooled metrics.
     """
     from torch_geometric.data import Batch
 
@@ -90,6 +96,7 @@ def collate_pairs(batch, target_to_idx=None):
     labels = torch.cat([b["label"] for b in batch])
     fep_baselines = torch.cat([b["fep_baseline"] for b in batch])
     targets = [b["target"] for b in batch]
+    edge_indices = [b["edge_idx"] for b in batch]
 
     target_idx = None
     if target_to_idx is not None:
@@ -107,4 +114,5 @@ def collate_pairs(batch, target_to_idx=None):
         "targets": targets,
         "labels": labels,
         "fep_baselines": fep_baselines,
+        "edge_indices": edge_indices,
     }
