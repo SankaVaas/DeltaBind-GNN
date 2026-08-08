@@ -105,11 +105,10 @@ def evaluate_loss(model, loader, loss_fn, device, ranking_weight=RANKING_LOSS_WE
     return total_loss / len(loader.dataset)
 
 
-def run_cycle_loss_step(model, target_cycles, optimizer, device, epoch):
+def run_cycle_loss_step(model, target_cycles, optimizer, device, epoch, target_to_idx):
     """One extra gradient step per epoch using the cycle-consistency loss.
     Kept separate from the main batch loop since each cycle costs 3x the
     forward passes of a normal edge -- not worth doing every batch."""
-
     if not target_cycles:
         return 0.0
 

@@ -65,9 +65,13 @@ def _to_pyg_data(sdf_path):
     )
 
 
-def cycle_consistency_loss(model, cycles, device, max_cycles_per_call=20, seed=None):
+def cycle_consistency_loss(model, cycles, device, target_to_idx, max_cycles_per_call=20, seed=None):
     """Samples up to `max_cycles_per_call` cycles and penalizes deviation
     from ddG(A->B) + ddG(B->C) + ddG(C->A) != 0.
+
+    target_to_idx: same mapping used by collate_pairs/train.py, needed here
+    because PairwiseDeltaHead now expects a target-embedding vector
+    concatenated onto every prediction, not just the raw ligand embeddings.
 
     Keep this a small sample per call (not the full cycle list) -- it's
     called every epoch alongside normal training, and each cycle costs 3x
@@ -89,9 +93,12 @@ def cycle_consistency_loss(model, cycles, device, max_cycles_per_call=20, seed=N
         emb_b = model.encoder(data_b.x, data_b.pos, data_b.batch)
         emb_c = model.encoder(data_c.x, data_c.pos, data_c.batch)
 
-        ddg_ab = model.head(emb_a, emb_b)
-        ddg_bc = model.head(emb_b, emb_c)
-        ddg_ca = model.head(emb_c, emb_a)
+        target_idx = torch.tensor([target_to_idx[target]], device=device)
+        pocket_vec = model.target_embedding(target_idx)
+
+        ddg_ab = model.head(emb_a, emb_b, pocket_vec)
+        ddg_bc = model.head(emb_b, emb_c, pocket_vec)
+        ddg_ca = model.head(emb_c, emb_a, pocket_vec)
 
         cycle_sum = ddg_ab + ddg_bc + ddg_ca
         total_loss = total_loss + cycle_sum.pow(2).mean()
