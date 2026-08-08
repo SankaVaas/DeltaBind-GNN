@@ -106,6 +106,15 @@ def main():
             print(f"[skip] {target}: could not read edges.csv ({e})")
             continue
 
+        # Column names are assumed consistent based on sampling 4/92 files via
+        # inspect_schrodinger_edges.py, but not every subset is guaranteed to
+        # match exactly -- fail this subset loudly rather than crash the whole run.
+        required_cols = {"Ligand 1", "Ligand 2", "ddG (kcal/mol)"}
+        if not required_cols.issubset(df.columns):
+            print(f"[skip] {target}: unexpected columns {list(df.columns)} "
+                  f"(expected {required_cols})")
+            continue
+
         for _, row in df.iterrows():
             a_name, b_name, ddg = row["Ligand 1"], row["Ligand 2"], row["ddG (kcal/mol)"]
 
