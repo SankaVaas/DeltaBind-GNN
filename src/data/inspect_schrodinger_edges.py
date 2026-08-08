@@ -106,9 +106,18 @@ def main():
             print(f"[skip] {target}: could not read edges.csv ({e})")
             continue
 
-        # Column names are assumed consistent based on sampling 4/92 files via
-        # inspect_schrodinger_edges.py, but not every subset is guaranteed to
-        # match exactly -- fail this subset loudly rather than crash the whole run.
+        # Column names aren't fully consistent across all 92 files (e.g.
+        # charge_annhil/egfr uses 'Ligand1'/'Exp. ddG (kcal/mol)' instead of
+        # 'Ligand 1'/'ddG (kcal/mol)'). Normalize known variants rather than
+        # dropping the whole subset.
+        column_aliases = {
+            "Ligand1": "Ligand 1",
+            "Ligand2": "Ligand 2",
+            "Exp. ddG (kcal/mol)": "ddG (kcal/mol)",
+            "Exp ddG (kcal/mol)": "ddG (kcal/mol)",
+        }
+        df = df.rename(columns={k: v for k, v in column_aliases.items() if k in df.columns})
+
         required_cols = {"Ligand 1", "Ligand 2", "ddG (kcal/mol)"}
         if not required_cols.issubset(df.columns):
             print(f"[skip] {target}: unexpected columns {list(df.columns)} "
